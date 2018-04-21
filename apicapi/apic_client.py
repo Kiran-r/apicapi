@@ -12,10 +12,6 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-#
-# @author: Henry Gessau, Cisco Systems
-# @author: Ivar Lazzaro (ivar-lazzaro), Cisco Systems Inc.
-# @author: Amit Bose (amibose@cisco.com), Cisco Systems Inc.
 
 import base64
 import collections
@@ -43,6 +39,8 @@ SLEEP_ON_FULL_QUEUE = 1
 
 REFRESH_CODES = [APIC_CODE_FORBIDDEN, ]
 SCOPE = 'openstack_scope'
+MULTI_PARENT = ['faultInst', 'tagInst']
+DN_BASE = 'uni/'
 
 
 # Info about a Managed Object's relative name (RN) and container.
@@ -52,6 +50,13 @@ class ManagedObjectName(collections.namedtuple('MoPath',
     def __new__(cls, container, rn_fmt, can_create=True, name_fmt=None):
         return super(ManagedObjectName, cls).__new__(cls, container, rn_fmt,
                                                      can_create, name_fmt)
+
+
+def _to_klass_name(name):
+    klass_name = name.split('__')[0]
+    if klass_name[-1:] == '2':
+        klass_name = klass_name[:-1]
+    return klass_name
 
 
 class ManagedObjectClass(object):
@@ -68,8 +73,12 @@ class ManagedObjectClass(object):
     """
     scope = ''
     supported_mos = {
-        'fvTenant': ManagedObjectName(None, 'tn-%(name)s', name_fmt='__%s'),
+        'polUni': ManagedObjectName(None, 'uni', False),
+        'fvTenant': ManagedObjectName('polUni', 'tn-%(name)s',
+                                      name_fmt='__%s'),
         'fvBD': ManagedObjectName('fvTenant', 'BD-%(name)s', name_fmt='%s'),
+        'fvRsBDToOut': ManagedObjectName('fvBD', 'rsBDToOut-%(name)s',
+                                         name_fmt='__%s'),
         'fvRsBd': ManagedObjectName('fvAEPg', 'rsbd'),
         'fvSubnet': ManagedObjectName('fvBD', 'subnet-[%s]'),
         'fvCtx': ManagedObjectName('fvTenant', 'ctx-%(name)s',
@@ -82,6 +91,7 @@ class ManagedObjectClass(object):
         'fvRsConsIf': ManagedObjectName('fvAEPg', 'rsconsif-%s'),
         'fvRsDomAtt': ManagedObjectName('fvAEPg', 'rsdomAtt-[%s]'),
         'fvRsPathAtt': ManagedObjectName('fvAEPg', 'rspathAtt-[%s]'),
+        'fvRsSecInherited': ManagedObjectName('fvAEPg', 'rssecInherited-[%s]'),
 
         'vzAny': ManagedObjectName('fvCtx', 'any'),
         'vzRsAnyToCons': ManagedObjectName('vzAny', 'rsanyToCons-%s'),
@@ -90,11 +100,16 @@ class ManagedObjectClass(object):
         'vzSubj': ManagedObjectName('vzBrCP', 'subj-%s'),
         'vzFilter': ManagedObjectName('fvTenant', 'flt-%s'),
         'vzRsFiltAtt': ManagedObjectName('vzSubj', 'rsfiltAtt-%s'),
+        'vzRsSubjGraphAtt': ManagedObjectName('vzSubj', 'rsSubjGraphAtt'),
         'vzEntry': ManagedObjectName('vzFilter', 'e-%s'),
         'vzInTerm': ManagedObjectName('vzSubj', 'intmnl'),
         'vzRsFiltAtt__In': ManagedObjectName('vzInTerm', 'rsfiltAtt-%s'),
+        'vzRsInTermGraphAtt': ManagedObjectName('vzInTerm',
+                                                'rsInTermGraphAtt'),
         'vzOutTerm': ManagedObjectName('vzSubj', 'outtmnl'),
         'vzRsFiltAtt__Out': ManagedObjectName('vzOutTerm', 'rsfiltAtt-%s'),
+        'vzRsOutTermGraphAtt': ManagedObjectName('vzOutTerm',
+                                                 'rsOutTermGraphAtt'),
         'vzRsSubjFiltAtt': ManagedObjectName('vzSubj', 'rssubjFiltAtt-%s'),
         'vzCPIf': ManagedObjectName('fvTenant', 'cif-%s'),
         'vzRsIf': ManagedObjectName('vzCPIf', 'rsif'),
@@ -102,6 +117,7 @@ class ManagedObjectClass(object):
         'l3extOut': ManagedObjectName('fvTenant', 'out-%(name)s',
                                       name_fmt='__%s'),
         'l3extRsEctx': ManagedObjectName('l3extOut', 'rsectx'),
+        'l3extRsL3DomAtt': ManagedObjectName('l3extOut', 'rsl3DomAtt'),
         'l3extLNodeP': ManagedObjectName('l3extOut', 'lnodep-%s'),
         'l3extRsNodeL3OutAtt': ManagedObjectName('l3extLNodeP',
                                                  'rsnodeL3OutAtt-[%s]'),
@@ -110,31 +126,48 @@ class ManagedObjectClass(object):
         'l3extLIfP': ManagedObjectName('l3extLNodeP', 'lifp-%s'),
         'l3extRsPathL3OutAtt': ManagedObjectName('l3extLIfP',
                                                  'rspathL3OutAtt-[%s]'),
+        'l3extIp': ManagedObjectName('l3extRsPathL3OutAtt',
+                                     'addr-[%s]'),
+        'l3extMember': ManagedObjectName('l3extRsPathL3OutAtt',
+                                         'mem-%s'),
+        'l3extIp__Member': ManagedObjectName('l3extMember',
+                                             'addr-[%s]'),
         'l3extInstP': ManagedObjectName('l3extOut', 'instP-%(name)s',
                                         name_fmt='__%s'),
+        'bgpExtP': ManagedObjectName('l3extOut', 'bgpExtP'),
+        'bgpPeerP': ManagedObjectName('l3extRsPathL3OutAtt', 'peerP-[%s]'),
+        'bgpAsP__Peer': ManagedObjectName('bgpPeerP', 'as'),
+        'bgpLocalAsnP': ManagedObjectName('bgpPeerP', 'localasn'),
         'fvRsCons__Ext': ManagedObjectName('l3extInstP', 'rscons-%s'),
         'fvRsProv__Ext': ManagedObjectName('l3extInstP', 'rsprov-%s'),
         'fvCollectionCont': ManagedObjectName('fvRsCons', 'collectionDn-[%s]'),
         'l3extSubnet': ManagedObjectName('l3extInstP', 'extsubnet-[%s]'),
+        'l3extRsInstPToNatMappingEPg':
+            ManagedObjectName('l3extInstP', 'rsInstPToNatMappingEPg'),
 
-        'physDomP': ManagedObjectName(None, 'phys-%s'),
+        'physDomP': ManagedObjectName('polUni', 'phys-%s'),
+        'l3extDomP': ManagedObjectName('polUni', 'l3dom-%s'),
 
-        'infraInfra': ManagedObjectName(None, 'infra'),
+        'infraInfra': ManagedObjectName('polUni', 'infra'),
+        'infraSetPol': ManagedObjectName('infraInfra', 'settings'),
         'infraNodeP': ManagedObjectName('infraInfra', 'nprof-%(name)s',
-                                        name_fmt='__%s'),
+                                        name_fmt='==%s'),
         'infraLeafS': ManagedObjectName('infraNodeP', 'leaves-%s-typ-%s'),
         'infraNodeBlk': ManagedObjectName('infraLeafS', 'nodeblk-%s'),
         'infraRsAccPortP': ManagedObjectName('infraNodeP', 'rsaccPortP-[%s]'),
         'infraRsAccNodePGrp': ManagedObjectName('infraLeafS', 'rsaccNodePGrp'),
         'infraAccPortP': ManagedObjectName('infraInfra',
                                            'accportprof-%(name)s',
-                                           name_fmt='__%s'),
+                                           name_fmt='==%s'),
         'infraHPortS': ManagedObjectName('infraAccPortP', 'hports-%s-typ-%s'),
         'infraPortBlk': ManagedObjectName('infraHPortS', 'portblk-%s'),
         'infraRsAccBaseGrp': ManagedObjectName('infraHPortS', 'rsaccBaseGrp'),
         'infraFuncP': ManagedObjectName('infraInfra', 'funcprof'),
-        'infraAccNodePGrp': ManagedObjectName('infraFuncP', 'accnodepgrp-%s'),
-        'infraAccPortGrp': ManagedObjectName('infraFuncP', 'accportgrp-%s'),
+        'infraAccNodePGrp': ManagedObjectName('infraFuncP',
+                                              'accnodepgrp-%s'),
+        'infraAccPortGrp': ManagedObjectName('infraFuncP',
+                                             'accportgrp-%(name)s',
+                                             name_fmt='==%s'),
         'infraRsAttEntP': ManagedObjectName('infraAccPortGrp', 'rsattEntP'),
 
         'infraConnNodeS': ManagedObjectName('infraRsAttEntP',
@@ -149,9 +182,10 @@ class ManagedObjectClass(object):
                                               'portblk-block1'),
 
         'infraAttEntityP': ManagedObjectName('infraInfra', 'attentp-%(name)s',
-                                             name_fmt='__%s'),
+                                             name_fmt='==%s'),
         'infraProvAcc': ManagedObjectName('infraAttEntityP', 'provacc'),
         'infraRsDomP': ManagedObjectName('infraAttEntityP', 'rsdomP-[%s]'),
+        'infraRsVlanNs': ManagedObjectName('physDomP', 'rsvlanNs'),
         'infraRsVlanNs__phys': ManagedObjectName('physDomP', 'rsvlanNs'),
         'infraRsVlanNs__vmm': ManagedObjectName('vmmDomP', 'rsvlanNs'),
         'infraAccBndlGrp': ManagedObjectName('infraFuncP', 'accbundle-%s'),
@@ -164,7 +198,7 @@ class ManagedObjectClass(object):
                                                 'from-%s-to-%s'),
 
         # Fabric
-        'fabricInst': ManagedObjectName(None, 'fabric', False),
+        'fabricInst': ManagedObjectName('polUni', 'fabric', False),
         'bgpInstPol': ManagedObjectName('fabricInst', 'bgpInstP-%(name)s',
                                         name_fmt='%s'),
         'bgpRRP': ManagedObjectName('bgpInstPol', 'rr'),
@@ -181,13 +215,17 @@ class ManagedObjectClass(object):
         'fabricRsPodPGrp': ManagedObjectName('fabricPodS__ALL', 'rspodPGrp'),
 
         # Read-only
+        'topSystem': ManagedObjectName(None, 'sys', False),
         'fabricTopology': ManagedObjectName(None, 'topology', False),
         'fabricPod': ManagedObjectName('fabricTopology', 'pod-%s', False),
         'fabricPathEpCont': ManagedObjectName('fabricPod', 'paths-%s', False),
         'fabricPathEp': ManagedObjectName('fabricPathEpCont', 'pathep-%s',
                                           False),
         'fabricNode': ManagedObjectName('fabricPod', 'node-%s', False),
-        'vmmProvP': ManagedObjectName(None, 'vmmp-OpenStack', False),
+        'topSystem__NODE': ManagedObjectName('fabricNode', 'sys', False),
+        'l2BrIf': ManagedObjectName('topSystem__NODE', 'br-[%s]', False),
+        'opflexODev': ManagedObjectName('l2BrIf', 'odev-%s', False),
+        'vmmProvP': ManagedObjectName('polUni', 'vmmp-%s', False),
         'vmmDomP': ManagedObjectName('vmmProvP', 'dom-%s'),
         'vmmUsrAccP': ManagedObjectName('vmmDomP', 'usracc-%s'),
         'vmmCtrlrP': ManagedObjectName('vmmDomP', 'ctrlr-%s'),
@@ -198,13 +236,129 @@ class ManagedObjectClass(object):
         'fvnsMcastAddrBlk': ManagedObjectName('fvnsMcastAddrInstP',
                                               'fromaddr-[%s]-toaddr-[%s]'),
         'vmmRsAcc': ManagedObjectName('vmmCtrlrP', 'rsacc'),
+        # Generic tag as a reference for rn_fmt
+        'tagInst': ManagedObjectName(None, 'tag-%s', False),
+        'hostprotPol': ManagedObjectName('fvTenant', 'pol-%s'),
+        'hostprotSubj': ManagedObjectName('hostprotPol', 'subj-%s'),
+        'hostprotRule': ManagedObjectName('hostprotSubj', 'rule-%s'),
+        'hostprotRemoteIp': ManagedObjectName('hostprotRule', 'ip-[%s]'),
+
+        # redirect-policy objects for service-graph
+        'vnsSvcCont': ManagedObjectName('fvTenant', 'svcCont'),
+        'vnsSvcRedirectPol': ManagedObjectName('vnsSvcCont',
+                                               'svcRedirectPol-%s'),
+        'vnsRedirectDest': ManagedObjectName('vnsSvcRedirectPol',
+                                             'RedirectDest_ip-[%s]'),
+        'vnsRsRedirectHealthGroup': ManagedObjectName('vnsRedirectDest',
+                                                      'rsRedirectHealthGroup'),
+        'vnsRsIPSLAMonitoringPol': ManagedObjectName('vnsSvcRedirectPol',
+                                                     'rsIPSLAMonitoringPol'),
+        'vnsRedirectHealthGroup': ManagedObjectName('vnsSvcCont',
+                                                    'redirectHealthGroup-%s'),
+
+        # device-cluster objects for service-graph
+        'vnsLDevVip': ManagedObjectName('fvTenant', 'lDevVip-%s'),
+        'vnsRsALDevToPhysDomP': ManagedObjectName('vnsLDevVip',
+                                                  'rsALDevToPhysDomP'),
+        'vnsRsALDevToDomP': ManagedObjectName('vnsLDevVip', 'rsALDevToDomP'),
+        'vnsLIf': ManagedObjectName('vnsLDevVip', 'lIf-%s'),
+        'vnsRsCIfAtt': ManagedObjectName('vnsLIf',
+                                         'rscIfAtt-[%s]'),
+        'vnsRsCIfAttN': ManagedObjectName('vnsLIf',
+                                          'rscIfAttN-[%s]'),
+        'vnsCDev': ManagedObjectName('vnsLDevVip', 'cDev-%s'),
+        'vnsCIf': ManagedObjectName('vnsCDev', 'cIf-[%s]'),
+        'vnsRsCIfPathAtt': ManagedObjectName('vnsCIf', 'rsCIfPathAtt'),
+
+        # service-graph objects
+        'vnsAbsGraph': ManagedObjectName('fvTenant', 'AbsGraph-%s'),
+        'vnsAbsTermConn': ManagedObjectName('vnsAbsGraph', 'AbsTConn'),
+        'vnsInTerm': ManagedObjectName('vnsAbsGraph', 'intmnl'),
+        'vnsOutTerm': ManagedObjectName('vnsAbsGraph', 'outtmnl'),
+        'vnsAbsTermNodeCon': ManagedObjectName('vnsAbsGraph',
+                                               'AbsTermNodeCon-%s'),
+        'vnsAbsTermConn__Con': ManagedObjectName('vnsAbsTermNodeCon',
+                                                 'AbsTConn'),
+        'vnsInTerm__Con': ManagedObjectName('vnsAbsTermNodeCon', 'intmnl'),
+        'vnsOutTerm__Con': ManagedObjectName('vnsAbsTermNodeCon', 'outtmnl'),
+
+        'vnsAbsTermNodeProv': ManagedObjectName('vnsAbsGraph',
+                                                'AbsTermNodeProv-%s'),
+        'vnsAbsTermConn__Prov': ManagedObjectName('vnsAbsTermNodeProv',
+                                                  'AbsTConn'),
+        'vnsInTerm__Prov': ManagedObjectName('vnsAbsTermNodeProv', 'intmnl'),
+        'vnsOutTerm__Prov': ManagedObjectName('vnsAbsTermNodeProv', 'outtmnl'),
+
+        'vnsAbsConnection': ManagedObjectName('vnsAbsGraph',
+                                              'AbsConnection-%s'),
+        'vnsRsAbsConnectionConns':
+        ManagedObjectName('vnsAbsConnection', 'rsabsConnectionConns-[%s]'),
+
+        'vnsAbsNode': ManagedObjectName('vnsAbsGraph', 'AbsNode-%s'),
+        'vnsAbsFuncConn': ManagedObjectName('vnsAbsNode', 'AbsFConn-%s'),
+        'vnsRsNodeToLDev': ManagedObjectName('vnsAbsNode', 'rsNodeToLDev'),
+
+        # device-cluster-context objects for service-graph
+        'vnsLDevCtx': ManagedObjectName('fvTenant', 'ldevCtx-c-%s-g-%s-n-%s'),
+        'vnsRsLDevCtxToLDev': ManagedObjectName('vnsLDevCtx',
+                                                'rsLDevCtxToLDev'),
+        'vnsLIfCtx': ManagedObjectName('vnsLDevCtx', 'lIfCtx-c-%s'),
+        'vnsRsLIfCtxToSvcRedirectPol':
+        ManagedObjectName('vnsLIfCtx', 'rsLIfCtxToSvcRedirectPol'),
+        'vnsRsLIfCtxToBD': ManagedObjectName('vnsLIfCtx', 'rsLIfCtxToBD'),
+        'vnsRsLIfCtxToLIf': ManagedObjectName('vnsLIfCtx', 'rsLIfCtxToLIf'),
+
+        # injected container objects
+        'compUni': ManagedObjectName(None, 'comp', False),
+        'compProv': ManagedObjectName('compUni', 'prov-%s'),
+        'compCtrlr': ManagedObjectName('compProv', 'ctrlr-[%s]-%s'),
+        'vmmInjectedCont': ManagedObjectName('compCtrlr', 'injcont'),
+        'vmmInjectedHost': ManagedObjectName('vmmInjectedCont', 'host-[%s]'),
+        'vmmInjectedNs': ManagedObjectName('vmmInjectedCont', 'ns-[%s]'),
+        'vmmInjectedDepl': ManagedObjectName('vmmInjectedNs', 'depl-[%s]'),
+        'vmmInjectedReplSet': ManagedObjectName('vmmInjectedNs', 'rs-[%s]'),
+        'vmmInjectedSvc': ManagedObjectName('vmmInjectedNs', 'svc-[%s]'),
+        'vmmInjectedSvcPort': ManagedObjectName('vmmInjectedSvc',
+                                                'p-%s-prot-%s-t-%s'),
+        'vmmInjectedSvcEp': ManagedObjectName('vmmInjectedSvc', 'ep-%s'),
+        'vmmInjectedContGrp': ManagedObjectName('vmmInjectedNs', 'grp-[%s]'),
+
+        'fvIPSLAMonitoringPol': ManagedObjectName('fvTenant',
+                                                  'ipslaMonitoringPol-%s'),
+
     }
 
+    same_rn_types = {'hostprotSubj': ['vzSubj'],
+                     'vzSubj': ['hostprotSubj']}
+
+    intermediate_mos = set(['vzRsFiltAtt__In', 'vzRsFiltAtt__Out'])
+
+    supported_tags = {
+        'tagInst__%s' % x: ManagedObjectName(x, 'tag-%s')
+        for x in supported_mos}
+
+    supported_mos.update(supported_tags)
     # The ManagedObjects specified below will not be scoped whenever
     # The input parameters match the specified argument
     scope_exceptions = {
         'fvTenant': [('common',)],
     }
+
+    infa_scope_exceptios = {
+
+    }
+
+    prefix_to_mos = {
+        (x.rn_fmt[:x.rn_fmt.find('-')] if '-' in x.rn_fmt else x.rn_fmt):
+            _to_klass_name(y)
+        for y, x in supported_mos.items()
+    }
+    prefix_to_mos['fault'] = 'faultInst'
+    prefix_to_mos['health'] = 'healthInst'
+    prefix_to_mos['tag'] = 'tagInst'
+    prefix_to_mos['vzSubj'] = 'subj'
+
+    mos_to_prefix = {v: k for k, v in prefix_to_mos.iteritems()}
 
     # Note(Henry): The use of a mutable default argument _inst_cache is
     # intentional. It persists for the life of MoClass to cache instances.
@@ -221,9 +375,7 @@ class ManagedObjectClass(object):
 
     def __init__(self, mo_class):
         self.klass = mo_class
-        self.klass_name = mo_class.split('__')[0]
-        if (self.klass_name[-1:] == '2'):
-            self.klass_name = self.klass_name[:-1]
+        self.klass_name = _to_klass_name(mo_class)
         mo = self.supported_mos[mo_class]
         self.container = mo.container
         if mo.name_fmt:
@@ -250,22 +402,29 @@ class ManagedObjectClass(object):
             dn_fmt = '%s/%s' % (container.dn_fmt, self.rn_fmt)
             params = container.params + param
             return dn_fmt, params
-        return 'uni/%s' % self.rn_fmt, param
+        return '%s' % self.rn_fmt, param
 
     def _scope(self, fmt, *params):
-        if ManagedObjectClass.scope_exceptions:
-            exc = ManagedObjectClass.scope_exceptions.get(self.klass)
+        res = self._fmt_replace(
+            fmt, params, ManagedObjectClass.scope_exceptions, '__')
+        res = self._fmt_replace(
+            res, params, ManagedObjectClass.infa_scope_exceptios, '==')
+        return res % params
+
+    def _fmt_replace(self, fmt, params, exceptions, token):
+        if exceptions is not None:
+            exc = exceptions.get(self.klass)
             res = fmt.replace(
-                '__', '' if exc and (params in exc) or any(
+                token, '' if exc and (params in exc) or any(
                     x for x in params if getattr(x, "existing", False)) else
                 ManagedObjectClass.scope)
         else:
-            res = fmt.replace('__', '')
-        return res % params
+            res = fmt.replace(token, '')
+        return res
 
     def dn(self, *params):
         """Return the distinguished name for a managed object."""
-        dn = ['uni']
+        dn = []
         for part in self.params:
             dn.append(part.rn(*params[:part.rn_param_count]))
             params = params[part.rn_param_count:]
@@ -278,6 +437,15 @@ class ManagedObjectClass(object):
     def name(self, *params):
         """Return the name for a managed object."""
         return self._scope(self.name_fmt, *params)
+
+    def base(self):
+        if self.container:
+            container_mo = ManagedObjectClass(self.container)
+            while container_mo.container:
+                container_mo = ManagedObjectClass(container_mo.container)
+            return container_mo.rn_fmt
+        else:
+            return self.rn_fmt
 
 
 class ApicSession(object):
@@ -364,7 +532,7 @@ class ApicSession(object):
     def _check_session(self):
         """Check that we are logged in and ensure the session is active."""
         if self._is_cert_auth():
-            return      # Certificate based authentication is session-less
+            return  # Certificate based authentication is session-less
         if not self.authentication:
             raise cexc.ApicSessionNotLoggedIn
         if time.time() > self.session_deadline:
@@ -396,7 +564,12 @@ class ApicSession(object):
             request_str = '%s, data=%s' % (url, data)
             LOG.debug(("data = %s"), data)
         # imdata is where the APIC returns the useful information
-        imdata = response.json().get('imdata')
+        try:
+            imdata = response.json().get('imdata')
+        except ValueError:
+            LOG.error(response)
+            raise
+
         LOG.debug(("Response: %s"), imdata)
         if response.status_code != requests.codes.ok:
             try:
@@ -422,10 +595,13 @@ class ApicSession(object):
 
     # REST requests
 
-    def get_data(self, request):
+    def get_data(self, request, **kwargs):
         """Retrieve generic data from the server."""
         self._check_session()
         url = self._api_url(request)
+        if kwargs:
+            url += '?' + '&'.join(['%s=%s' % (k.replace('_', '-'), v)
+                                   for k, v in kwargs.iteritems()])
         return self._send(self.session.get, url)
 
     def get_mo(self, mo, *args):
@@ -463,6 +639,9 @@ class ApicSession(object):
         self._check_session()
         url = self._mo_url(mo, *params)
         return self._send(self.session.post, url, data=data)
+
+    def post_body_dict(self, mo, data_dict, *params):
+        return self.post_body(mo, json.dumps(data_dict), *params)
 
     def delete_mo(self, mo, *params):
         self._check_session()
@@ -599,7 +778,7 @@ class ApicSession(object):
     def refresh(self):
         """Called when a session has timed out or almost timed out."""
         if self._is_cert_auth():
-            return          # Certificate-based calls are session-less
+            return  # Certificate-based calls are session-less
         url = self._api_url('aaaRefresh')
         response = self._do_request(self.session.get, url,
                                     cookies=self.cookie)
@@ -694,21 +873,24 @@ class ManagedObjectAccess(object):
 class Transaction(object):
     """API consistent with RestClient class to operate Transactions."""
 
-    def __init__(self, session):
+    def __init__(self, session, top_send=False):
         self.root = None
         self.root_params = []
         self.root_mo = None
         self.session = session
+        self.top_send = top_send
 
     def __getattr__(self, mo_class):
         if mo_class not in ManagedObjectClass.supported_mos:
             raise cexc.ApicManagedObjectNotSupported(mo_class=mo_class)
-        self.__dict__[mo_class] = TransactionBuilder(self, mo_class)
+        self.__dict__[mo_class] = TransactionBuilder(self, mo_class,
+                                                     self.top_send)
         return self.__dict__[mo_class]
 
     def init_root(self, mo, *params, **data):
         self.session.renew(mo, *params)
-        self.root = TransactionNode(mo.klass_name, mo.rn(*params), **data)
+        self.root = TransactionNode(mo.klass_name, mo.rn(*params), mo.base(),
+                                    **data)
         self.root_params = params
         self.root_mo = mo
 
@@ -731,7 +913,7 @@ class Transaction(object):
         if self.session.renew(mo, *params):
             # Re calculate RN for current MO
             mo_rn = mo.rn(*params[offset:]) if offset else mo.rn_fmt
-        curr = TransactionNode(mo.klass_name, mo_rn, **kwargs)
+        curr = TransactionNode(mo.klass_name, mo_rn, mo.base(), **kwargs)
         level.append(curr)
         return curr
 
@@ -739,7 +921,9 @@ class Transaction(object):
         """Recursively create all container nodes."""
         offset = 0 - mo.rn_param_count
         rn = mo.rn(*params[offset:]) if offset else mo.rn_fmt
-        if not mo.container:
+        if not mo.container or mo.container in ['polUni',
+                                                'fabricTopology',
+                                                'compUni']:
             # Tail of recursion
             if not self.root:
                 self.init_root(mo, *params)
@@ -752,22 +936,86 @@ class Transaction(object):
         # Mo is child of this node
         return self._append_child(parent, mo, *params)
 
+    def get_top_level_roots(self):
+        """
+
+        :return: list of nodes and their params
+        """
+
+        def is_intermediate_object(node):
+            # intmnl is an example of intermediate node
+            fmt = ManagedObjectClass.supported_mos[node.mo_class].rn_fmt
+            return '-' not in fmt and not fmt.startswith('rs')
+
+        result = []
+        to_visit = collections.OrderedDict()
+        to_visit[self.root.mo_base] = [self.root]
+        # Verify if root is part of the solution
+        if self.root.attributes.get('apicapi_top'):
+            result.append((self.root.mo_base + '/' + self.root.mo_rn,
+                           self.root))
+        while to_visit:
+            partial_dn, nodes = to_visit.popitem(last=False)
+            for node in nodes:
+                dummy = not node.attributes.pop('apicapi_top', False)
+                # Look at the node's children
+                good_children = []
+                parent_dn = partial_dn + '/' + node.mo_rn
+                while node.children:
+                    # If child is not top node, pop it from the list
+                    child = node.children.pop()
+                    # Append the node for visit
+                    to_visit.setdefault(parent_dn, []).append(
+                        child)
+                    # If the current node is Dummy, put non-dummy nodes in the
+                    # result
+                    if child.attributes.get('apicapi_top'):
+                        if dummy:
+                            result.append((parent_dn + '/' + child.mo_rn,
+                                           child))
+                        else:
+                            # If current node is not dummy put it in the good
+                            # children list
+                            good_children.append(child)
+                    elif is_intermediate_object(child):
+                        # Put it in the good children if node is not dummy
+                        if not dummy:
+                            child.attributes['apicapi_top'] = True
+                            good_children.append(child)
+                # Restore node's children with good children
+                for child in good_children:
+                    node.children.append(child)
+        return result
+
     def commit(self):
-        return self.session.post_body(
-            self.root_mo, json.dumps(self.root),
-            *self.root_params)
+        if self.top_send:
+            roots = self.get_top_level_roots()
+            for root in roots:
+                mo_class = root[1].mo_class
+                dn_mgr = DNManager()
+                params = dn_mgr.aci_decompose_dn_guess(root[0], mo_class)
+                mo = ManagedObjectClass(params[0])
+                rns = dn_mgr.filter_rns(params[1])
+                self.session.post_body_dict(mo, root[1], *rns)
+        else:
+            return self.session.post_body_dict(self.root_mo, self.root,
+                                               *self.root_params)
 
 
 class TransactionBuilder(object):
     """Creates a ManagedObject subtree starting from a root."""
 
-    def __init__(self, transaction, mo_class):
+    def __init__(self, transaction, mo_class, top_send=False):
         self.trs = transaction
+        self.top_send = top_send
         self.mo = ManagedObjectClass(mo_class)
 
     def add(self, *args, **kwargs):
         node = self.trs.create_branch(self.mo, *args)
         node.update_attributes(**kwargs)
+        if self.top_send:
+            # Mark top level object:
+            node.update_attributes(apicapi_top=True)
 
     def remove(self, *args):
         node = self.trs.create_branch(self.mo, *args)
@@ -776,10 +1024,11 @@ class TransactionBuilder(object):
 
 class TransactionNode(dict):
 
-    def __init__(self, mo_class, mo_rn, **kwargs):
+    def __init__(self, mo_class, mo_rn, mo_base, **kwargs):
         dict.__init__(self)
         self.mo_class = mo_class
         self.mo_rn = mo_rn
+        self.mo_base = mo_base
         self.attributes = {"rn": mo_rn}
         self.children = []
         self.update_attributes(**kwargs)
@@ -803,10 +1052,13 @@ class RestClient(ApicSession):
     def __init__(self, log, system_id, hosts, usr=None, pwd=None, ssl=True,
                  scope_names=True, renew_names=True, verify=False,
                  request_timeout=None, cert_name=None, private_key_file=None,
-                 sign_algo=None, sign_hash=None):
+                 sign_algo=None, sign_hash=None, scope_infra=True):
         """Establish a session with the APIC."""
         if not scope_names:
             ManagedObjectClass.scope_exceptions = None
+        if not scope_infra:
+            ManagedObjectClass.infa_scope_exceptios = None
+
         global LOG
         LOG = log.getLogger(__name__)
         super(RestClient, self).__init__(hosts, usr, pwd, ssl, verify,
@@ -841,9 +1093,9 @@ class RestClient(ApicSession):
         return False
 
     @contextlib.contextmanager
-    def transaction(self, transaction=None, ph=None):
+    def transaction(self, transaction=None, ph=None, top_send=False):
         if not transaction:
-            transaction = Transaction(self)
+            transaction = Transaction(self, top_send=top_send)
             yield transaction
             if transaction.root:
                 result = transaction.commit()
@@ -877,6 +1129,7 @@ class DNManager(object):
         raise AttributeError
 
     def _decompose(self, dn, mo):
+        # TODO(amitbose) I think this can be replaced by _decompose_dn
         if not dn:
             raise DNManager.InvalidNameFormat()
         fmt = (mo.rn_fmt.replace('__', '').replace('%s', '(.+)').
@@ -884,9 +1137,9 @@ class DNManager(object):
 
         split = dn.split('/')
         param = re.findall(fmt, split[-1])
-        if not param or len(param) != mo.rn_param_count:
+        if (not param or len(param) != mo.rn_param_count) and param != [fmt]:
             raise DNManager.InvalidNameFormat()
-        if mo.container:
+        if mo.container and mo.container != 'polUni':
             return self._decompose(
                 dn[:-(len(split[-1]) + 1)],
                 ManagedObjectClass(mo.container)) + param
@@ -903,3 +1156,163 @@ class DNManager(object):
                 dn, ManagedObjectClass(DNManager.nice_to_rn[nice]))
         except DNManager.InvalidNameFormat:
             return None
+
+    def _decompose_dn(self, dn, mo):
+        if not dn:
+            raise DNManager.InvalidNameFormat()
+        # RN components that don't have a variable part need to copied
+        # as is to the output. Hence make them a RE matching group by
+        # surrounding them with parenthesis.
+        dn_fmt = '/'.join('(%s)' % x if ('-' not in x) else x
+                          for x in mo.dn_fmt.split('/'))
+        # this matches upto 1 level of nesting of square brackets
+        # e.g. [foobar] -> OK, matches 'foobar'
+        #      [foo[bar]rr] -> OK, matches 'foo[bar]rr'
+        #      [fo[oo]ba[ar]rr] -> Fails, matches only 'fo[oo]ba[ar'
+        nested_paren_re = '\[([^\[\]]+(?:\[[^\]]+\])*[^\]]*)\]'
+        dn_fmt = (dn_fmt.replace('__', '')
+                  .replace('==', '')
+                  .replace('[%s]', nested_paren_re)
+                  .replace('%s', '([^\/]+)') + '$')
+
+        match = re.match(dn_fmt, dn)
+        if not match:
+            raise DNManager.InvalidNameFormat(
+                "Invalid name format for"
+                "DN %s and mo %s" % (dn, mo.rn_fmt))
+        rn_values = list(match.groups())
+
+        mo_types_and_card = []
+        total_card = 0
+        while mo:
+            card = mo.rn_param_count
+            card = 1 if card <= 1 else card
+            total_card += card
+            mo_types_and_card.append((mo.klass_name, card))
+            mo = ManagedObjectClass(mo.container) if mo.container else None
+        mo_types_and_card.reverse()
+
+        if len(rn_values) != total_card:
+            raise DNManager.InvalidNameFormat()
+
+        mo_types = []
+        rn_results = []
+        start = 0
+        for mo_type, card in mo_types_and_card:
+            mo_types.append(mo_type)
+            rn_results.append(','.join(rn_values[start:(start + card)])
+                              if card > 1 else rn_values[start])
+            start += card
+
+        if mo_types and mo_types[0] == 'polUni':
+            mo_types = mo_types[1:]
+            rn_results = rn_results[1:]
+
+        return mo_types, rn_results
+
+    def _aci_decompose(self, dn, ugly):
+        # Special case for Faults since the can have multiple type of
+        # parents
+        if ugly in MULTI_PARENT:
+            # Find out the parent's type
+            split = re.split(r"/+(?=[^\[\]]*(?:\[|$))", dn)
+            prefix_to_mos = ManagedObjectClass.prefix_to_mos
+            parent_type = prefix_to_mos.get(
+                split[-2], prefix_to_mos.get(split[-2][:split[-2].find('-')]))
+            if not parent_type:
+                raise DNManager.InvalidNameFormat()
+            _, mos_and_rns = self.aci_decompose_dn_guess('/'.join(split[:-1]),
+                                                         parent_type)
+            mo_types, rn_values = map(list, zip(*mos_and_rns))
+            mo_types.append(ugly)
+            rn_values.append(split[-1][split[-1].find('-') + 1:])
+            return mo_types, rn_values
+        return self._decompose_dn(dn, ManagedObjectClass(ugly))
+
+    def aci_decompose(self, dn, ugly):
+        _, rn_values = self._aci_decompose(dn, ugly)
+        return rn_values
+
+    def aci_decompose_split(self, dn, ugly):
+        rn_values = self.aci_decompose(dn, ugly)
+        result = []
+        for x in rn_values:
+            result.extend(x.split(','))
+        return result
+
+    def aci_decompose_with_type(self, dn, ugly):
+        try:
+            mo_types, rn_values = self._aci_decompose(dn, ugly)
+        except DNManager.InvalidNameFormat:
+            if ugly in ManagedObjectClass.same_rn_types:
+                for type in ManagedObjectClass.same_rn_types[ugly]:
+                    try:
+                        mo_types, rn_values = self._aci_decompose(dn, type)
+                        break
+                    except DNManager.InvalidNameFormat:
+                        pass
+                else:
+                    raise
+            else:
+                raise
+        return list(zip(mo_types, rn_values))
+
+    def aci_decompose_dn_guess(self, dn, mo_type_hint):
+        """
+        Decompose DN when input ACI ManagedObject type may not be exact.
+        If DN decomposition is successful, returns a tuple with the following
+        items:
+        * ManagedObject type that matches the DN
+        * List of (ManagedObject type, RN value) pairs for each DN
+          component
+        """
+        try:
+            return mo_type_hint, self.aci_decompose_with_type(dn, mo_type_hint)
+        except DNManager.InvalidNameFormat:
+            # check if DN fits another MO
+            other_mos = [m for m in ManagedObjectClass.supported_mos
+                         if ManagedObjectClass(m).klass_name == mo_type_hint]
+            for mo in other_mos:
+                try:
+                    return mo, self.aci_decompose_with_type(dn, mo)
+                except DNManager.InvalidNameFormat:
+                    pass
+        raise DNManager.InvalidNameFormat()
+
+    def filter_rns(self, mos_and_rns):
+        """
+        From a list of (ManagedObject type, RN value) pairs, remove those
+        pairs where the RN is fixed and return the RN. Also split multi-valued
+        RNs. Returns a list of RN values.
+        """
+        rns = []
+        for p in mos_and_rns:
+            if (p[0] not in ManagedObjectClass.supported_mos or
+                    ManagedObjectClass(p[0]).rn_param_count):
+                rns.extend(p[1].split(','))
+        return rns
+
+    def build(self, mos_and_rns):
+        """
+        Build a DN string from a list of (ManagedObject type, RN value) pairs.
+        """
+        rns = []
+        for p in mos_and_rns:
+            mo = ManagedObjectClass(p[0])
+            rns.append(mo.rn(*p[1].split(',')) if mo.rn_param_count else
+                       mo.rn())
+        prefix = ''
+        if mos_and_rns:
+            base = ManagedObjectClass(mos_and_rns[0][0]).base()
+            if base != mos_and_rns[0][1]:
+                prefix = base + '/'
+        return prefix + '/'.join(rns)
+
+    def get_rn_base(self, rn):
+        prefix = rn.split('-')[0]
+        mo_type = ManagedObjectClass.prefix_to_mos[prefix]
+        mo = ManagedObjectClass(mo_type)
+        # go to base object
+        while mo.container:
+            mo = ManagedObjectClass(mo.container)
+        return mo.rn_fmt

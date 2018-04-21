@@ -12,8 +12,6 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-#
-# @author: Ivar Lazzaro (ivar-lazzaro), Cisco Systems Inc.
 
 import argparse
 import logging as log
@@ -34,7 +32,7 @@ def clean(args):
                'infraRsDomP', 'infraRsVlanNs', 'infraAccBndlGrp',
                'infraRsAttEntP', 'infraRsLacpPol', 'lacpLagPol',
                'fvnsVlanInstP', 'bgpRRP', 'bgpRRNodePEp',
-               'bgpAsP', 'fabricFuncP']
+               'bgpAsP', 'fabricFuncP', 'infraAccNodePGrp']
     [apic_session.delete_class(x) for x in classes]
 
 

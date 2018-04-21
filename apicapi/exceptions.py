@@ -12,8 +12,6 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-#
-# @author: Henry Gessau, Cisco Systems
 
 """Exceptions used by Cisco APIC ML2 mechanism driver."""
 
@@ -26,6 +24,8 @@ class ApicException(Exception):
             super(ApicException, self).__init__(self.message % kwargs)
             self.msg = self.message % kwargs
             self.err_code = kwargs.get('err_code')
+            self.err_status = kwargs.get('status')
+            self.message = self.msg
         except Exception:
             super(ApicException, self).__init__(self.message)
 
@@ -94,5 +94,16 @@ class ApicMultipleVlanRanges(ApicException):
 
 
 class ApicInvalidTransactionMultipleRoot(ApicException):
-    """The switch and port for the specified host are not configured."""
+    """The current transaction has more than one root node."""
     message = "An apic transaction cannot start from multiple root nodes"
+
+
+class ApicVmwareVmmDomainNotConfigured(ApicException):
+    """The VMware VMM domain doesn't exist in APIC."""
+    message = "VMware VMM Domain '%(name)s' does not exist in APIC"
+
+
+class ApicVmmTypeNotSupported(ApicException):
+    """The APIC VMM type is not supported at this moment."""
+    message = ("VMM type '%(type)s' is not supported. Currently we only "
+               "support '%(list)s'.")

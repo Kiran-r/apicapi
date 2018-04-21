@@ -12,15 +12,13 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-#
-# @author: Ivar Lazzaro (ivar-lazzaro), Cisco Systems Inc.
 
 import setuptools
 
 
 setuptools.setup(
     name="apicapi",
-    version="1.0.5",
+    version="1.5.0",
     zip_safe=False,
     packages=setuptools.find_packages(exclude=["*.tests", "*.tests.*",
                                                "tests.*", "tests"]),
@@ -31,7 +29,8 @@ setuptools.setup(
     description="This library provides an interface to the APIC REST api.",
     entry_points={
         'console_scripts': [
-            'apic-cleanup = apicapi.tools.cleanup:main',
-            'apic-route-reflector = apicapi.tools.reflector:main']
+            'apic = apicapi.tools.cli.shell:run',
+            'apic-bond-watch = apicapi.tools.bondwatch:main',
+        ]
     }
 )

@@ -12,10 +12,6 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-#
-# @author: Henry Gessau, Cisco Systems
-# @author: Ivar Lazzaro (ivar-lazzaro), Cisco Systems Inc.
-# @author: Amit Bose (amibose@cisco.com), Cisco Systems Inc.
 
 import base64
 import contextlib
@@ -24,10 +20,14 @@ from OpenSSL import crypto
 import requests
 import tempfile
 
-from oslo.config import cfg
+try:
+    from oslo.config import cfg
+except ImportError:
+    from oslo_config import cfg
 
 from apicapi import apic_client as apic
 from apicapi import apic_mapper as apic_mapper
+from apicapi import config as apic_cfg
 from apicapi.tests.unit.common import config  # noqa
 
 
@@ -49,10 +49,14 @@ APIC_CONTRACT = 'signedContract'
 
 APIC_SYSTEM_ID = 'sysid'
 APIC_DOMAIN = 'cumuloNimbus'
+APIC_L3EXT_DOMAIN = '%s_l3ext' % APIC_SYSTEM_ID
+APIC_SW_PG_NAME = 'switch_pg'
 
 APIC_NODE_PROF = 'red'
 APIC_FUNC_PROF = 'beta'
 APIC_ATT_ENT_PROF = 'delta'
+APIC_L3EXT_FUNC_PROF = '%s_l3ext_function_profile' % APIC_SYSTEM_ID
+APIC_L3EXT_ATT_ENT_PROF = '%s_l3ext_entity_profile' % APIC_SYSTEM_ID
 APIC_VLAN_NAME = 'gamma'
 APIC_VLANID_FROM = 2900
 APIC_VLANID_TO = 2999
@@ -240,6 +244,7 @@ class ConfigMixin(object):
 
         # Configure global option apic_system_id
         cfg.CONF.set_override('apic_system_id', APIC_SYSTEM_ID)
+        cfg.CONF.set_override('config_file', 'etc/conf_sample.ini')
 
         # Configure the Cisco APIC mechanism driver
         apic_test_config = {
@@ -254,22 +259,31 @@ class ConfigMixin(object):
             'apic_function_profile': APIC_FUNC_PROF,
         }
         for opt, val in apic_test_config.items():
-            self.override_config(opt, val, 'ml2_cisco_apic')
+            self.override_config(opt, val, self.config_group)
         self.apic_config = cfg.CONF.ml2_cisco_apic
 
         # Configure switch topology
-        apic_switch_cfg = {
+        apic_mock_cfg = {
             'apic_switch:101': {'ubuntu1,ubuntu2': ['3/11']},
-            'apic_switch:102': {'rhel01,rhel02': ['4/21'],
-                                'rhel03': ['4/22']},
+            'apic_switch:102': {'rhel01|eth1,rhel02|eth2': ['4/21'],
+                                'rhel03|eth3': ['1/4/22'],
+                                'pod_id': '2'},
+            'apic_physical_network:rack1': {
+                'hosts': ['host1, host2, host3 '],
+                'segment_type': ['vlan'],
+            },
+            'apic_physical_network:rack2': {
+                'hosts': [' host4, , host5'],
+            },
         }
         self.switch_dict = {
             '101': {
                 '3/11': ['ubuntu1', 'ubuntu2'],
             },
             '102': {
-                '4/21': ['rhel01', 'rhel02'],
-                '4/22': ['rhel03'],
+                '4/21': ['rhel01|eth1', 'rhel02|eth2'],
+                '1/4/22': ['rhel03|eth3'],
+                'pod_id': '2'
             },
         }
         self.vpc_dict = {
@@ -284,15 +298,32 @@ class ConfigMixin(object):
                 'cidr_exposed': APIC_EXT_CIDR_EXPOSED,
                 'gateway_ip': APIC_EXT_GATEWAY_IP,
             },
+            APIC_NETWORK + '-1-name': {
+                'switch': APIC_EXT_SWITCH,
+                'port': APIC_EXT_MODULE + '/' + APIC_EXT_PORT,
+                'encap': APIC_EXT_ENCAP,
+                'cidr_exposed': APIC_EXT_CIDR_EXPOSED,
+                'gateway_ip': APIC_EXT_GATEWAY_IP,
+            },
+            APIC_NETWORK + '-pre-name': {
+                'preexisting': 'true',
+            },
         }
-        self.vlan_ranges = ['physnet1:100:199']
+        self.vlan_ranges = ['physnet0', 'physnet1:100:199']
+        self.old_parser = apic_cfg._parse_files
         self.mocked_parser = mock.patch.object(
-            cfg, 'MultiConfigParser').start()
-        self.mocked_parser.return_value.read.return_value = [apic_switch_cfg]
-        self.mocked_parser.return_value.parsed = [apic_switch_cfg]
+            apic_cfg, '_parse_files').start()
+        self.mocked_parser.return_value = [apic_mock_cfg]
+        self.addCleanup(self.restore_parser)
+
+    def restore_parser(self):
+        apic_cfg._parse_files = self.old_parser
 
     def override_config(self, opt, val, group=None):
         cfg.CONF.set_override(opt, val, group)
+
+    def clear_config(self, opt, group=None):
+        cfg.CONF.clear_override(opt, group)
 
 
 class DbModelMixin(object):
@@ -304,7 +335,7 @@ class DbModelMixin(object):
 
     def set_up_mocks(self):
         self.mocked_session = mock.Mock()
-        get_session = mock.patch('apicapi.db.api.get_session').start()
+        get_session = mock.patch('apicapi.tests.db.api.get_session').start()
         get_session.return_value = self.mocked_session
 
     def mock_db_query_all_return(self, value):

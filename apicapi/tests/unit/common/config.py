@@ -13,8 +13,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
-
+try:
+    from oslo.config import cfg
+except ImportError:
+    from oslo_config import cfg
 
 DEFAULT_ROOT_HELPER = ('sudo /usr/local/bin/neutron-rootwrap '
                        '/etc/neutron/rootwrap.conf')
@@ -26,6 +28,7 @@ global_opts = [
     cfg.StrOpt('apic_system_id',
                default='openstack',
                help="Prefix for APIC domain/names/profiles created"),
+    cfg.StrOpt('config_file', default='etc/config_sample.ini'),
 ]
 
 
@@ -115,6 +118,7 @@ def create_switch_dictionary():
         switch_dict[switch_id] = switch_dict.get(switch_id, {})
         for host_list, port in conf[switch_id]:
             hosts = host_list.split(',')
+            hosts = map(lambda a: a.decode('string_escape'), hosts)
             port = port[0]
             switch_dict[switch_id][port] = (
                 switch_dict[switch_id].get(port, []) + hosts)

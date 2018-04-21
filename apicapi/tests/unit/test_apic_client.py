@@ -12,10 +12,6 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-#
-# @author: Henry Gessau, Cisco Systems
-# @author: Ivar Lazzaro (ivar-lazzaro), Cisco Systems Inc.
-# @author: Amit Bose (amibose@cisco.com), Cisco Systems Inc.
 
 import mock
 import requests
@@ -328,6 +324,32 @@ class TestCiscoApicClient(base.BaseTestCase, mocked.ControllerMixin):
             self.assertFalse(trs.commit.called)
         self.assertEqual(1, trs.commit.call_count)
 
+    def test_sub_transaction_top_send(self):
+
+        trs = apic.Transaction(self.apic, top_send=True)
+        trs.post_body = mock.Mock()
+        # first root
+        self.apic.fvSubnet.create(mocked.APIC_TENANT, 'bd', 'subnet',
+                                  transaction=trs)
+        # Second root with children
+        self.apic.fvBD.create(mocked.APIC_TENANT, 'bd1', transaction=trs)
+        self.apic.fvSubnet.create(mocked.APIC_TENANT, 'bd1', 'subnet',
+                                  transaction=trs)
+        self.apic.fvSubnet.create(mocked.APIC_TENANT, 'bd1', 'subnet1',
+                                  transaction=trs)
+        # Third root
+        self.apic.vzSubj.create(mocked.APIC_TENANT, 'c', 's',
+                                transaction=trs)
+        self.apic.vzRsFiltAtt__In.create(mocked.APIC_TENANT, 'c', 's', 'i1',
+                                         transaction=trs)
+        roots = trs.get_top_level_roots()
+        # Roots are BD1 and bd/subnet
+        self.assertEqual(3, len(roots))
+        # Verify children are there
+        for item in roots:
+            if item[1].mo_rn == 'BD-bd':
+                self.assertEqual(2, len(item[1].children))
+
     def test_renew_called(self):
         s_name = mapper.ApicName('name', 'id')
         s_name.renew = mock.Mock()
@@ -361,3 +383,234 @@ class TestCiscoApicClient(base.BaseTestCase, mocked.ControllerMixin):
             ['_openstack-maple_', 'openstack-maple_app',
              'public_ff5b842c-8a76-4cb4-8197-9f9726be44ac'],
             manager.decompose_endpoint_group(epg))
+
+    def test_aci_decompose(self):
+        manager = self.apic.dn_manager
+        res = manager.aci_decompose('uni/tn-ivar-wstest/BD-test/rsctx',
+                                    'fvRsCtx')
+        self.assertEqual(['ivar-wstest', 'test', 'rsctx'], res)
+
+        res = manager.aci_decompose_with_type(
+            'uni/tn-ivar-wstest/BD-test/rsctx', 'fvRsCtx')
+        self.assertEqual([('fvTenant', 'ivar-wstest'),
+                          ('fvBD', 'test'),
+                          ('fvRsCtx', 'rsctx')], res)
+
+        res = manager.aci_decompose(
+            'uni/tn-ivar-wstest/BD-test/subnet-[10.10.1.1/28]', 'fvSubnet')
+        self.assertEqual(['ivar-wstest', 'test', '10.10.1.1/28'], res)
+        res = manager.aci_decompose_with_type(
+            'uni/tn-ivar-wstest/BD-test/subnet-[10.10.1.1/28]', 'fvSubnet')
+        self.assertEqual([('fvTenant', 'ivar-wstest'),
+                          ('fvBD', 'test'),
+                          ('fvSubnet', '10.10.1.1/28')], res)
+
+        self.assertRaises(apic.DNManager.InvalidNameFormat,
+                          manager.aci_decompose,
+                          'uni/tn-ivar-wstest/BD-test', 'fvSubnet')
+
+        self.assertRaises(apic.DNManager.InvalidNameFormat,
+                          manager.aci_decompose,
+                          'uni/tn-ivar-wstest/BD-test', 'fvTenant')
+
+        res = manager.aci_decompose_with_type(
+            'topology/pod-1/node-301/sys/br-[eth1/33]/odev-167776320',
+            'opflexODev')
+        self.assertEqual([('fabricTopology', 'topology'),
+                          ('fabricPod', '1'),
+                          ('fabricNode', '301'),
+                          ('topSystem', 'sys'),
+                          ('l2BrIf', 'eth1/33'),
+                          ('opflexODev', '167776320')], res)
+
+    def test_aci_decompose_dn_guess(self):
+        manager = self.apic.dn_manager
+        res = manager.aci_decompose_dn_guess(
+            'uni/tn-amit1/brc-c/subj-s2/intmnl/rsfiltAtt-f', 'vzRsFiltAtt')
+        self.assertEqual('vzRsFiltAtt__In', res[0])
+        self.assertEqual([('fvTenant', 'amit1'),
+                          ('vzBrCP', 'c'),
+                          ('vzSubj', 's2'),
+                          ('vzInTerm', 'intmnl'),
+                          ('vzRsFiltAtt', 'f')], res[1])
+
+        res = manager.aci_decompose_dn_guess(
+            'uni/tn-amit1/brc-c/subj-s2/outtmnl/rsfiltAtt-g', 'vzRsFiltAtt')
+        self.assertEqual('vzRsFiltAtt__Out', res[0])
+        self.assertEqual([('fvTenant', 'amit1'),
+                          ('vzBrCP', 'c'),
+                          ('vzSubj', 's2'),
+                          ('vzOutTerm', 'outtmnl'),
+                          ('vzRsFiltAtt', 'g')], res[1])
+
+        res = manager.aci_decompose_dn_guess(
+            'uni/tn-amit1/brc-c/subj-s2/rsfiltAtt-h', 'vzRsFiltAtt')
+        self.assertEqual('vzRsFiltAtt', res[0])
+        self.assertEqual([('fvTenant', 'amit1'),
+                          ('vzBrCP', 'c'),
+                          ('vzSubj', 's2'),
+                          ('vzRsFiltAtt', 'h')], res[1])
+
+        self.assertRaises(apic.DNManager.InvalidNameFormat,
+                          manager.aci_decompose_dn_guess,
+                          'uni/tn-ivar-wstest/BD-test', 'vzRsFiltAtt')
+
+        res = manager.aci_decompose_dn_guess(
+            'uni/tn-tn1/BD-mybd/subnet-[10.10.10.1/28]/tag-aid', 'tagInst')
+        self.assertEqual('tagInst', res[0])
+        self.assertEqual([('fvTenant', 'tn1'),
+                          ('fvBD', 'mybd'),
+                          ('fvSubnet', '10.10.10.1/28'),
+                          ('tagInst', 'aid')], res[1])
+
+        res = manager.aci_decompose_dn_guess(
+            'uni/tn-common/out-default/instP-extnet/rsprov-default',
+            'fvRsProv')
+        self.assertEqual('fvRsProv__Ext', res[0])
+        self.assertEqual([('fvTenant', 'common'),
+                          ('l3extOut', 'default'),
+                          ('l3extInstP', 'extnet'),
+                          ('fvRsProv', 'default')], res[1])
+
+        old_scope = apic.ManagedObjectClass.scope
+        apic.ManagedObjectClass.scope = ''
+        res = manager.aci_decompose_dn_guess('uni/infra/nprof-test',
+                                             'infraNodeP')
+        self.assertEqual('infraNodeP', res[0])
+        self.assertEqual([('infraInfra', 'infra'),
+                          ('infraNodeP', 'test')], res[1])
+        self.assertEqual('uni/infra/nprof-test', manager.build(res[1]))
+
+        res = manager.aci_decompose_dn_guess(
+            'uni/infra/nprof-test/leaves-201-typ-range',
+            'infraLeafS')
+        self.assertEqual('infraLeafS', res[0])
+        self.assertEqual([('infraInfra', 'infra'),
+                          ('infraNodeP', 'test'),
+                          ('infraLeafS', '201,range')], res[1])
+        self.assertEqual('uni/infra/nprof-test/leaves-201-typ-range',
+                         manager.build(res[1]))
+        self.assertEqual(
+            ['infra', 'test', '201', 'range'],
+            manager.aci_decompose_split(
+                'uni/infra/nprof-test/leaves-201-typ-range', 'infraLeafS'))
+
+        res = manager.aci_decompose_dn_guess(
+            'uni/infra/nprof-test/rsaccPortP-[uni/infra/accportprof-test]',
+            'infraRsAccPortP')
+        self.assertEqual('infraRsAccPortP', res[0])
+        self.assertEqual([('infraInfra', 'infra'),
+                          ('infraNodeP', 'test'),
+                          ('infraRsAccPortP', 'uni/infra/accportprof-test')],
+                         res[1])
+        self.assertEqual(
+            'uni/infra/nprof-test/rsaccPortP-[uni/infra/accportprof-test]',
+            manager.build(res[1]))
+
+        res = manager.aci_decompose_dn_guess(
+            'uni/infra/accportprof-test', 'infraAccPortP')
+        self.assertEqual('infraAccPortP', res[0])
+        self.assertEqual([('infraInfra', 'infra'),
+                          ('infraAccPortP', 'test')],
+                         res[1])
+        self.assertEqual(
+            'uni/infra/accportprof-test', manager.build(res[1]))
+
+        res = manager.aci_decompose_dn_guess(
+            'uni/infra/accportprof-test/hports-test-typ-test', 'infraHPortS')
+        self.assertEqual('infraHPortS', res[0])
+        self.assertEqual([('infraInfra', 'infra'),
+                          ('infraAccPortP', 'test'),
+                          ('infraHPortS', 'test,test')],
+                         res[1])
+        self.assertEqual(
+            'uni/infra/accportprof-test/hports-test-typ-test',
+            manager.build(res[1]))
+
+        apic.ManagedObjectClass.scope = old_scope
+
+    def test_aci_decompose_fault_dn(self):
+        manager = self.apic.dn_manager
+        res = manager.aci_decompose('uni/tn-amit1/brc-c/fault-F1228',
+                                    'faultInst')
+        self.assertEqual(['amit1', 'c', 'F1228'], res)
+
+        res = manager.aci_decompose(
+            'uni/tn-amit1/brc-c/subj-s2/intmnl/rsfiltAtt-f/fault-F1111',
+            'faultInst')
+        self.assertEqual(['amit1', 'c', 's2', 'intmnl', 'f', 'F1111'], res)
+
+        res = manager.aci_decompose(
+            'uni/tn-amit1/brc-c/subj-s2/outtmnl/rsfiltAtt-g/fault-F1111',
+            'faultInst')
+        self.assertEqual(['amit1', 'c', 's2', 'outtmnl', 'g', 'F1111'], res)
+
+        res = manager.aci_decompose(
+            'uni/tn-amit1/brc-c/subj-s2/rsfiltAtt-h/fault-F1111',
+            'faultInst')
+        self.assertEqual(['amit1', 'c', 's2', 'h', 'F1111'], res)
+
+    def test_prefix_mos(self):
+        prefix_mos = apic.ManagedObjectClass.prefix_to_mos
+        self.assertEqual('fvBD', prefix_mos['BD'])
+        self.assertEqual('fvRsCtx', prefix_mos['rsctx'])
+        self.assertEqual('vzRsFiltAtt', prefix_mos['rsfiltAtt'])
+        self.assertEqual('infraRsAttEntP', prefix_mos['rsattEntP'])
+
+    def test_build_dn(self):
+        clnt = apic.RestClient(self.log, mocked.APIC_SYSTEM_ID,
+                               mocked.APIC_HOSTS, scope_names=False)
+        manager = clnt.dn_manager
+        self.assertEqual('uni/tn-amit1/brc-c/subj-s2/rsfiltAtt-h',
+                         manager.build([('fvTenant', 'amit1'),
+                                        ('vzBrCP', 'c'),
+                                        ('vzSubj', 's2'),
+                                        ('vzRsFiltAtt', 'h')]))
+
+        self.assertEqual('uni/tn-amit1/brc-c/subj-s2/intmnl/rsfiltAtt-f',
+                         manager.build([('fvTenant', 'amit1'),
+                                        ('vzBrCP', 'c'),
+                                        ('vzSubj', 's2'),
+                                        ('vzInTerm', 'intmnl'),
+                                        ('vzRsFiltAtt', 'f')]))
+        self.assertEqual(
+            'topology/pod-1/node-301/sys/br-[eth1/33]/odev-167776320',
+            manager.build([('fabricTopology', 'topology'),
+                          ('fabricPod', '1'),
+                          ('fabricNode', '301'),
+                          ('topSystem', 'sys'),
+                          ('l2BrIf', 'eth1/33'),
+                          ('opflexODev', '167776320')]))
+
+    def test_aci_decompose_dn_nested_parens(self):
+        manager = self.apic.dn_manager
+        res = manager.aci_decompose(
+            'uni/tn-tenant1/ap-lab/epg-web/rspathAtt-'
+            '[topology/pod-1/paths-101/pathep-[eth1/2]]',
+            'fvRsPathAtt')
+        self.assertEqual(['tenant1', 'lab', 'web',
+                          'topology/pod-1/paths-101/pathep-[eth1/2]'],
+                         res)
+
+    def test_filter_rns(self):
+        manager = self.apic.dn_manager
+        res = manager.filter_rns([('fvTenant', 'amit1'),
+                                  ('vzBrCP', 'c'),
+                                  ('vzSubj', 's2'),
+                                  ('vzInTerm', 'intmnl'),
+                                  ('vzRsFiltAtt', 'f')])
+        self.assertEqual(['amit1', 'c', 's2', 'f'], res)
+
+        res = manager.filter_rns([('fvTenant', 'amit1'),
+                                  ('vnsSvcCont', 'svcCont'),
+                                  ('vnsSvcRedirectPol', 'r1')])
+        self.assertEqual(['amit1', 'r1'], res)
+
+        res = manager.filter_rns([('fvTenant', 't1'),
+                                  ('vnsLDevCtx', 'contract1,graph1,N1')])
+        self.assertEqual(['t1', 'contract1', 'graph1', 'N1'], res)
+
+    def test_rn_base(self):
+        manager = self.apic.dn_manager
+        self.assertEqual('uni', manager.get_rn_base('tn-test'))
+        self.assertEqual('topology', manager.get_rn_base('pod-test'))

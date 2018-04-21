@@ -13,23 +13,54 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import argparse
-import logging as log
+import click
 
-from apicapi import apic_client
+from apicapi.tools.cli import common
+from apicapi.tools import host_report
+from neutronclient.common import exceptions as n_exc
 
-POD_POLICY_GROUP_DN_PATH = 'uni/fabric/funcprof/podpgrp-%s'
+
+@click.group()
+def apicapi():
+    """Commands for APIC plugin"""
+    pass
 
 
-def ensure_bgp_pod_policy_created_on_apic(args):
-    apic = apic_client.RestClient(log, "", [args.apic_ip],
-                                  args.apic_username,
-                                  args.apic_password, args.ssl,
-                                  verify=args.insecure)
+@apicapi.command(name='neutron-sync')
+@common.os_options
+@common.pass_neutron_client
+def neutron_sync(neutron, *args, **kwargs):
+    message = ('The name used for this network is reserved for on '
+               'demand synchronization.')
+    try:
+        neutron.create_network({'network': {'name': 'apic-sync-network'}})
+    except Exception as e:
+        if message in e.message:
+            click.echo("Synchronization complete.")
+        elif (isinstance(e, n_exc.NeutronClientException) and
+              e.status_code == 504):
+            click.echo("Request timed out before the synchronization could "
+                       "complete. Please use --http-timeout parameter to "
+                       "specify a bigger time-out value in seconds.")
+        else:
+            raise
+
+
+@apicapi.command(name='route-reflector-create')
+@click.option('--asn', help='Autonomous system number', default='1')
+@common.apic_options
+@common.pass_apic_client
+def apic_route_reflector_create(apic, asn, **kwargs):
+    """APIC command for route reflector.
+
+    Creates a default route reflector on the APIC backend if needed.
+    """
     bgp_pol_name = 'default'
-    asn = args.asn
+    asn = asn
     pp_group_name = 'default'
     p_selector_name = 'default'
+    pod_policy_group_dn_path = 'uni/fabric/funcprof/podpgrp-%s'
+
     with apic.transaction() as trs:
         apic.bgpInstPol.create(bgp_pol_name, transaction=trs)
         if not apic.bgpRRP.get_subtree(bgp_pol_name):
@@ -51,20 +82,19 @@ def ensure_bgp_pod_policy_created_on_apic(args):
         apic.fabricPodS__ALL.create(p_selector_name, type='ALL',
                                     transaction=trs)
         apic.fabricRsPodPGrp.create(
-            p_selector_name, tDn=POD_POLICY_GROUP_DN_PATH % pp_group_name,
+            p_selector_name, tDn=pod_policy_group_dn_path % pp_group_name,
             transaction=trs)
 
 
-parser = argparse.ArgumentParser(description='Cleans APIC infra profiles')
-parser.add_argument('apic_ip', help='APIC ip address')
-parser.add_argument('apic_username', help='APIC username')
-parser.add_argument('apic_password', help='APIC password')
-parser.add_argument('--ssl', help='Whether to use SSL or not', default=False)
-parser.add_argument('--insecure', help='Verify server certificate',
-                    action='store_false')
-parser.add_argument('--asn', help='AS number for bgp policy', default='1')
+@apicapi.command(name='host-report')
+def host_report_cmd(*args, **kwargs):
+    """Generate a host report for tech support"""
+    host_report.main()
 
 
-def main():
-    args = parser.parse_args()
-    ensure_bgp_pod_policy_created_on_apic(args)
+def run():
+    apicapi(auto_envvar_prefix='APICAPI')
+
+
+if __name__ == '__main__':
+    run()
